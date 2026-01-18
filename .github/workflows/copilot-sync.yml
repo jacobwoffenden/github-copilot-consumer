@@ -66,7 +66,7 @@ jobs:
           done
 
           # Find existing instruction files in .github.
-          mapfile -t existing_files < <(find .github --maxdepth 1 --type f \( --name "*.instructions.md" -o --name "copilot-instructions.md" \) --print)
+          mapfile -t existing_files < <(find .github -maxdepth 1 -type f \( -name "*.instructions.md" -o -name "copilot-instructions.md" \) -print)
 
           for existing in "${existing_files[@]}"; do
             keep=false
@@ -79,9 +79,7 @@ jobs:
 
             # Remove files no longer in the mapping.
             if [[ "${keep}" == "false" ]]; then
-              rm -f "${existing}"
+              rm --force "${existing}"
               echo "Removed stale ${existing}"
             fi
           done
-
-          ls -rlt .github/
