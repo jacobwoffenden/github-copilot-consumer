@@ -165,7 +165,7 @@ jobs:
         with:
           # Commit only the instruction files.
           commit_message: ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}"
-          file_pattern: ".github/*instructions.md,.github/copilot-sync.json"
+          file_pattern: ".github/*instructions.md .github/copilot-sync.json"
           repo: ${{ github.repository }}
           branch: ${{ env.BRANCH_NAME }}
         env:
