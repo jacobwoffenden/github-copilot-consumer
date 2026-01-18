@@ -85,10 +85,10 @@ jobs:
       - name: Detect Changes
         id: detect_changes
         run: |
-          if git diff --quiet; then
-            echo "CHANGES_DETECTED=false" >>"${GITHUB_ENV}"
-          else
+          if git status --porcelain --untracked-files=all | grep --quiet .; then
             echo "CHANGES_DETECTED=true" >>"${GITHUB_ENV}"
+          else
+            echo "CHANGES_DETECTED=false" >>"${GITHUB_ENV}"
           fi
       
       - name: Create branch
