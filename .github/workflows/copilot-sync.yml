@@ -34,8 +34,30 @@ jobs:
           sync_ref="$(jq --raw-output '.ref' .github/copilot-sync.json)"
           echo "SYNC_REF=${sync_ref}" >>"${GITHUB_ENV}"
 
+      - name: Check for existing pull request
+        id: check_existing_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if a PR for this SYNC_REF is already open.
+          existing_pr_number=$(gh pr list \
+            --app "github-actions" \
+            --state open \
+            --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" \
+            --json "number" | jq --raw-output '.[0].number')
+
+          if [[ -n "${existing_pr_number}" && "${existing_pr_number}" != "null" ]]; then
+            echo "Existing pull request found: ${existing_pr_number}"
+            echo "PR_ALREADY_OPEN=true" >>"${GITHUB_ENV}"
+            echo "EXISTING_PULL_REQUEST=${existing_pr_number}" >>"${GITHUB_ENV}"
+          else
+            echo "No existing pull request found"
+            echo "PR_ALREADY_OPEN=false" >>"${GITHUB_ENV}"
+          fi
+
       - name: Sync Copilot instructions
         id: sync_instructions
+        if: env.PR_ALREADY_OPEN != 'true'
         run: |
           set -euo pipefail
 
@@ -84,7 +106,9 @@ jobs:
 
       - name: Detect Changes
         id: detect_changes
+        if: env.PR_ALREADY_OPEN != 'true'
         run: |
+          # Detect any changes (including untracked files).
           if git status --porcelain --untracked-files=all | grep --quiet .; then
             echo "CHANGES_DETECTED=true" >>"${GITHUB_ENV}"
           else
@@ -93,10 +117,11 @@ jobs:
       
       - name: Create branch
         id: create_branch
-        if: env.CHANGES_DETECTED == 'true'
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Create a unique branch for this sync run.
           branch_name="copilot-sync-${SYNC_REF}-${GITHUB_RUN_ID}"
           echo "BRANCH_NAME=${branch_name}" >>"${GITHUB_ENV}"
 
@@ -106,10 +131,11 @@ jobs:
             --raw-field sha="$(git rev-parse HEAD)"
 
       - name: Commit changes
-        if: env.CHANGES_DETECTED == 'true'
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
         id: commit_changes
         uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
         with:
+          # Commit only the instruction files.
           commit_message: ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}"
           file_pattern: ".github/*instructions.md"
           repo: ${{ github.repository }}
@@ -119,11 +145,12 @@ jobs:
 
       - name: Find previous pull request
         id: find_previous_pr
-        if: env.CHANGES_DETECTED == 'true'
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          previous_pull_request=$(gh pr list --app "github-actions" --state open --search ":copilot: Sync Copilot Configuration" --json "number" | jq --raw-output '.[].number')
+          # Find an older open PR for the same sync ref.
+          previous_pull_request=$(gh pr list --app "github-actions" --state open --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" --json "number" | jq --raw-output '.[].number')
 
           if [[ -z "${previous_pull_request}" ]]; then
             echo "No previous pull request found"
@@ -133,12 +160,13 @@ jobs:
           fi
 
       - name: Create pull request
-        if: env.CHANGES_DETECTED == 'true'
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
         id: create_pull_request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH_NAME: ${{ env.BRANCH_NAME }}
         run: |
+          # Open a new PR for the sync changes.
           pull_request_url=$(gh pr create \
             --title ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" \
             --body "This pull request syncs Copilot instructions from ${SYNC_REPO}@${SYNC_REF}." \
@@ -147,10 +175,11 @@ jobs:
           echo "PULL_REQUEST_URL=${pull_request_url}" >>"${GITHUB_ENV}"
 
       - name: Close previous pull request
-        if: env.CHANGES_DETECTED == 'true' && env.PREVIOUS_PULL_REQUEST != ''
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.PREVIOUS_PULL_REQUEST != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREVIOUS_PULL_REQUEST: ${{ env.PREVIOUS_PULL_REQUEST }}
           NEW_PULL_REQUEST: ${{ env.PULL_REQUEST_URL }}
         run: |
+          # Close any superseded PR for the same sync ref.
           gh pr close "${PREVIOUS_PULL_REQUEST}" --comment "Superseded by ${NEW_PULL_REQUEST}" --delete-branch
