@@ -1,8 +1,27 @@
 ---
 name: Copilot Sync
 
+# Description:
+# - Synchronizes Copilot instruction files from a central distribution repo.
+# - Tracks the latest upstream release and updates .github/copilot-sync.json when newer.
+# - Opens a PR only when there are actual changes on the sync branch.
+#
+# Issues / Risks:
+# - Open-PR detection relies on title matching; changing titles can bypass guards.
+# - If upstream removes files or changes paths unexpectedly, sync will fail.
+# - Requires GitHub CLI availability and permissions for releases, refs, and PRs.
+
 on:
-  # Manual trigger so you can run the sync on demand.
+  # Run when the config changes on main.
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/copilot-sync.json'
+  # Also run on a daily schedule.
+  schedule:
+    - cron: '30 9 * * *' # daily at 09:30 UTC
+  # Manual trigger for ad-hoc runs.
   workflow_dispatch:
 
 # Default to no permissions; grant only what the job needs.
@@ -107,10 +126,15 @@ jobs:
               dest_path=".github/${instruction}.instructions.md"
             fi
 
-            # Download the file from the distribution repo.
-            curl --fail --silent --show-error --location "${base_url}/${src_path}" --output "${dest_path}"
+            # Download the file from the distribution repo (keep local if missing upstream).
+            if curl --fail --silent --show-error --location "${base_url}/${src_path}" --output "${dest_path}"; then
+              echo "Synced ${instruction} -> ${dest_path}"
+            else
+              echo "Missing upstream file for ${instruction}; keeping local copy if present"
+              echo "::warning::Missing upstream file for ${instruction} (${base_url}/${src_path})"
+              echo "- Missing upstream file for ${instruction}: ${base_url}/${src_path}" >>"${GITHUB_STEP_SUMMARY}"
+            fi
             desired_files+=("${dest_path}")
-            echo "Synced ${instruction} -> ${dest_path}"
           done
 
           # Find existing instruction files in .github.
@@ -163,7 +187,7 @@ jobs:
         id: commit_changes
         uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
         with:
-          # Commit only the instruction files.
+          # Commit only the instruction files and config ref changes.
           commit_message: ":copilot: Sync Copilot configuration from ${SYNC_REPO}@${SYNC_REF}"
           file_pattern: ".github/*instructions.md .github/copilot-sync.json"
           repo: ${{ github.repository }}
