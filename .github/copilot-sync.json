@@ -3,6 +3,7 @@
   "ref": "v1.2.0",
   "instructions": [
     "copilot-instructions",
-    "documentation"
+    "documentation",
+    "terraform"
   ]
 }
