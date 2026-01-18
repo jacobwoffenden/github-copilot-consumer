@@ -1,0 +1,38 @@
+---
+name: Copilot Sync
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  copilot-sync:
+    name: Copilot Sync
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Process .github/copilot-sync.json
+        id: process_config
+        run: |
+          syncRepo="$(jq -r '.repo' .github/copilot-sync.json)"
+          export "SYNC_REPO=${syncRepo}" >>"${GITHUB_ENV}"
+
+          syncRef="$(jq -r '.ref' .github/copilot-sync.json)"
+          export "SYNC_REF=${syncRef}" >>"${GITHUB_OUTPUT}"
+          
+          syncInstructions="$(jq -r '.instructions' .github/copilot-sync.json)"
+          export "SYNC_INSTRUCTIONS=${syncInstructions}" >>"${GITHUB_OUTPUT}"
+
+      - name: Compare Version
+        id: compare_version
+        run: |
+          syncRepoLatestRef=$(gh release list --repo ${SYNC_REPO} --json name,isLatest | jq -r '.[] | select(.isLatest == true) | .name')
+          export "SYNC_REPO_LATEST_REF=${syncRepoLatestRef}" >>"${GITHUB_ENV}"
