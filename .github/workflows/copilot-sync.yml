@@ -171,24 +171,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Find previous pull request
-        id: find_previous_pr
+      - name: Check branch divergence
+        id: check_branch_divergence
         if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ env.BRANCH_NAME }}
         run: |
-          # Find an older open PR for the same sync ref.
-          previous_pull_request=$(gh pr list --app "github-actions" --state open --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" --json "number" | jq --raw-output '.[].number')
+          # Ensure the branch is ahead of main before opening a PR.
+          ahead_by=$(gh api \
+            --method GET "/repos/${{ github.repository }}/compare/main...${BRANCH_NAME}" \
+            --jq '.ahead_by')
 
-          if [[ -z "${previous_pull_request}" ]]; then
-            echo "No previous pull request found"
+          if [[ "${ahead_by}" -gt 0 ]]; then
+            echo "BRANCH_HAS_CHANGES=true" >>"${GITHUB_ENV}"
           else
-            echo "Found previous pull request: ${previous_pull_request}"
-            echo "PREVIOUS_PULL_REQUEST=${previous_pull_request}" >>"${GITHUB_ENV}"
+            echo "BRANCH_HAS_CHANGES=false" >>"${GITHUB_ENV}"
+          fi
+
+      - name: Find previous pull request
+        id: find_previous_pr
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.BRANCH_HAS_CHANGES == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find older open PRs for this repo but different sync refs.
+          previous_pull_requests=$(gh pr list \
+            --app "github-actions" \
+            --state open \
+            --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@" \
+            --json "number,title" | jq --raw-output \
+              --arg current_ref "${SYNC_REF}" \
+              --arg repo "${SYNC_REPO}" \
+              '.[] | select(.title | contains($repo + "@" + $current_ref) | not) | .number')
+
+          previous_pull_requests_list=$(echo "${previous_pull_requests}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+
+          if [[ -z "${previous_pull_requests_list}" ]]; then
+            echo "No previous pull requests found"
+          else
+            echo "Found previous pull requests: ${previous_pull_requests_list}"
+            echo "PREVIOUS_PULL_REQUESTS=${previous_pull_requests_list}" >>"${GITHUB_ENV}"
           fi
 
       - name: Create pull request
-        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true'
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.BRANCH_HAS_CHANGES == 'true'
         id: create_pull_request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -203,11 +230,13 @@ jobs:
           echo "PULL_REQUEST_URL=${pull_request_url}" >>"${GITHUB_ENV}"
 
       - name: Close previous pull request
-        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.PREVIOUS_PULL_REQUEST != ''
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.BRANCH_HAS_CHANGES == 'true' && env.PREVIOUS_PULL_REQUESTS != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PREVIOUS_PULL_REQUEST: ${{ env.PREVIOUS_PULL_REQUEST }}
+          PREVIOUS_PULL_REQUESTS: ${{ env.PREVIOUS_PULL_REQUESTS }}
           NEW_PULL_REQUEST: ${{ env.PULL_REQUEST_URL }}
         run: |
-          # Close any superseded PR for the same sync ref.
-          gh pr close "${PREVIOUS_PULL_REQUEST}" --comment "Superseded by ${NEW_PULL_REQUEST}" --delete-branch
+          # Close any superseded PRs for older sync refs.
+          for pr_number in ${PREVIOUS_PULL_REQUESTS}; do
+            gh pr close "${pr_number}" --comment "Superseded by ${NEW_PULL_REQUEST}" --delete-branch
+          done
