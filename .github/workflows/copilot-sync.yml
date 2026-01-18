@@ -71,7 +71,7 @@ jobs:
           existing_pr_number=$(gh pr list \
             --app "github-actions" \
             --state open \
-            --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" \
+            --search ":copilot: Sync Copilot configuration from ${SYNC_REPO}@${SYNC_REF}" \
             --json "number" | jq --raw-output '.[0].number')
 
           if [[ -n "${existing_pr_number}" && "${existing_pr_number}" != "null" ]]; then
@@ -83,7 +83,7 @@ jobs:
             echo "PR_ALREADY_OPEN=false" >>"${GITHUB_ENV}"
           fi
 
-      - name: Sync Copilot instructions
+      - name: Sync Copilot configuration
         id: sync_instructions
         if: env.PR_ALREADY_OPEN != 'true'
         run: |
@@ -164,7 +164,7 @@ jobs:
         uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
         with:
           # Commit only the instruction files.
-          commit_message: ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}"
+          commit_message: ":copilot: Sync Copilot configuration from ${SYNC_REPO}@${SYNC_REF}"
           file_pattern: ".github/*instructions.md .github/copilot-sync.json"
           repo: ${{ github.repository }}
           branch: ${{ env.BRANCH_NAME }}
@@ -199,7 +199,7 @@ jobs:
           previous_pull_requests=$(gh pr list \
             --app "github-actions" \
             --state open \
-            --search ":copilot: Sync Copilot instructions from ${SYNC_REPO}@" \
+            --search ":copilot: Sync Copilot configuration from ${SYNC_REPO}@" \
             --json "number,title" | jq --raw-output \
               --arg current_ref "${SYNC_REF}" \
               --arg repo "${SYNC_REPO}" \
@@ -223,8 +223,8 @@ jobs:
         run: |
           # Open a new PR for the sync changes.
           pull_request_url=$(gh pr create \
-            --title ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" \
-            --body "This pull request syncs Copilot instructions from ${SYNC_REPO}@${SYNC_REF}." \
+            --title ":copilot: Sync Copilot configuration from ${SYNC_REPO}@${SYNC_REF}" \
+            --body "This pull request syncs Copilot instructions from ${SYNC_REPO}@${SYNC_REF}.\n\nUpstream release: https://github.com/${SYNC_REPO}/releases/tag/${SYNC_REF}" \
             --head "${BRANCH_NAME}" \
             --base "main")
           echo "PULL_REQUEST_URL=${pull_request_url}" >>"${GITHUB_ENV}"
