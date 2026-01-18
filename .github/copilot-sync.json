@@ -2,6 +2,7 @@
   "repo": "jacobwoffenden/github-copilot-distribution",
   "ref": "v1.2.0",
   "instructions": [
-    "copilot-instructions"
+    "copilot-instructions",
+    "terraform"
   ]
 }
