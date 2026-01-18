@@ -34,6 +34,34 @@ jobs:
           sync_ref="$(jq --raw-output '.ref' .github/copilot-sync.json)"
           echo "SYNC_REF=${sync_ref}" >>"${GITHUB_ENV}"
 
+      - name: Resolve latest release
+        id: resolve_latest_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Determine the latest release tag for the distribution repo.
+          latest_ref=$(gh release list \
+            --repo "${SYNC_REPO}" \
+            --json "tagName,isLatest" | jq --raw-output '.[] | select(.isLatest == true) | .tagName')
+
+          if [[ -n "${latest_ref}" && "${latest_ref}" != "null" ]]; then
+            echo "SYNC_REF_LATEST=${latest_ref}" >>"${GITHUB_ENV}"
+          else
+            echo "SYNC_REF_LATEST=${SYNC_REF}" >>"${GITHUB_ENV}"
+          fi
+
+      - name: Update sync ref if newer
+        id: update_sync_ref
+        run: |
+          # Use latest ref if it differs from config, and persist to copilot-sync.json.
+          if [[ "${SYNC_REF_LATEST}" != "${SYNC_REF}" ]]; then
+            tmp_file="$(mktemp)"
+            jq --arg new_ref "${SYNC_REF_LATEST}" '.ref = $new_ref' .github/copilot-sync.json >"${tmp_file}"
+            mv "${tmp_file}" .github/copilot-sync.json
+            echo "SYNC_REF=${SYNC_REF_LATEST}" >>"${GITHUB_ENV}"
+            echo "Updated sync ref to ${SYNC_REF_LATEST}"
+          fi
+
       - name: Check for existing pull request
         id: check_existing_pr
         env:
@@ -137,7 +165,7 @@ jobs:
         with:
           # Commit only the instruction files.
           commit_message: ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}"
-          file_pattern: ".github/*instructions.md"
+          file_pattern: ".github/*instructions.md,.github/copilot-sync.json"
           repo: ${{ github.repository }}
           branch: ${{ env.BRANCH_NAME }}
         env:
