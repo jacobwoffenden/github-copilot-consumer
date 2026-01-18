@@ -15,6 +15,7 @@ jobs:
     permissions:
       # Required to write the synced files back to the repo.
       contents: write
+      pull-requests: write
     steps:
       - name: Checkout
         id: checkout
@@ -27,11 +28,11 @@ jobs:
         id: process_config
         run: |
           # Read sync metadata from the local config file.
-          syncRepo="$(jq --raw-output '.repo' .github/copilot-sync.json)"
-          echo "SYNC_REPO=${syncRepo}" >>"${GITHUB_ENV}"
+          sync_repo="$(jq --raw-output '.repo' .github/copilot-sync.json)"
+          echo "SYNC_REPO=${sync_repo}" >>"${GITHUB_ENV}"
 
-          syncRef="$(jq --raw-output '.ref' .github/copilot-sync.json)"
-          echo "SYNC_REF=${syncRef}" >>"${GITHUB_ENV}"
+          sync_ref="$(jq --raw-output '.ref' .github/copilot-sync.json)"
+          echo "SYNC_REF=${sync_ref}" >>"${GITHUB_ENV}"
 
       - name: Sync Copilot instructions
         id: sync_instructions
@@ -41,10 +42,7 @@ jobs:
           # Load the instruction names from config as a list.
           instructions=$(jq --raw-output '.instructions[]' .github/copilot-sync.json)
           # Base URL for raw files in the distribution repo.
-          baseUrl="https://raw.githubusercontent.com/${SYNC_REPO}/${SYNC_REF}/copilot-instructions"
-
-          # Ensure the destination folder exists.
-          mkdir --parents .github
+          base_url="https://raw.githubusercontent.com/${SYNC_REPO}/${SYNC_REF}/copilot-instructions"
 
           # Track files we want to exist after sync.
           desired_files=()
@@ -52,17 +50,17 @@ jobs:
           for instruction in ${instructions}; do
             # Special case: copilot-instructions has a different filename.
             if [[ "${instruction}" == "copilot-instructions" ]]; then
-              srcPath="${instruction}.md"
-              destPath=".github/${instruction}.md"
+              src_path="${instruction}.md"
+              dest_path=".github/${instruction}.md"
             else
-              srcPath="${instruction}.instructions.md"
-              destPath=".github/${instruction}.instructions.md"
+              src_path="${instruction}.instructions.md"
+              dest_path=".github/${instruction}.instructions.md"
             fi
 
             # Download the file from the distribution repo.
-            curl --fail --silent --show-error --location "${baseUrl}/${srcPath}" --output "${destPath}"
-            desired_files+=("${destPath}")
-            echo "Synced ${instruction} -> ${destPath}"
+            curl --fail --silent --show-error --location "${base_url}/${src_path}" --output "${dest_path}"
+            desired_files+=("${dest_path}")
+            echo "Synced ${instruction} -> ${dest_path}"
           done
 
           # Find existing instruction files in .github.
@@ -83,3 +81,76 @@ jobs:
               echo "Removed stale ${existing}"
             fi
           done
+
+      - name: Detect Changes
+        id: detect_changes
+        run: |
+          if git diff --quiet; then
+            echo "CHANGES_DETECTED=false" >>"${GITHUB_ENV}"
+          else
+            echo "CHANGES_DETECTED=true" >>"${GITHUB_ENV}"
+          fi
+      
+      - name: Create branch
+        id: create_branch
+        if: env.CHANGES_DETECTED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch_name="copilot-sync-${SYNC_REF}-${GITHUB_RUN_ID}"
+          echo "BRANCH_NAME=${branch_name}" >>"${GITHUB_ENV}"
+
+          gh api \
+            --method POST "/repos/${{ github.repository }}/git/refs" \
+            --raw-field ref="refs/heads/${BRANCH_NAME}" \
+            --raw-field sha="$(git rev-parse HEAD)"
+
+      - name: Commit changes
+        if: env.CHANGES_DETECTED == 'true'
+        id: commit_changes
+        uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
+        with:
+          commit_message: ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}"
+          file_pattern: ".github/*instructions.md"
+          repo: ${{ github.repository }}
+          branch: ${{ env.BRANCH_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find previous pull request
+        id: find_previous_pr
+        if: env.CHANGES_DETECTED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          previous_pull_request=$(gh pr list --app "github-actions" --state open --search ":copilot: Sync Copilot Configuration" --json "number" | jq --raw-output '.[].number')
+
+          if [[ -z "${previous_pull_request}" ]]; then
+            echo "No previous pull request found"
+          else
+            echo "Found previous pull request: ${previous_pull_request}"
+            echo "PREVIOUS_PULL_REQUEST=${previous_pull_request}" >>"${GITHUB_ENV}"
+          fi
+
+      - name: Create pull request
+        if: env.CHANGES_DETECTED == 'true'
+        id: create_pull_request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ env.BRANCH_NAME }}
+        run: |
+          pull_request_url=$(gh pr create \
+            --title ":copilot: Sync Copilot instructions from ${SYNC_REPO}@${SYNC_REF}" \
+            --body "This pull request syncs Copilot instructions from ${SYNC_REPO}@${SYNC_REF}." \
+            --head "${BRANCH_NAME}" \
+            --base "main")
+          echo "PULL_REQUEST_URL=${pull_request_url}" >>"${GITHUB_ENV}"
+
+      - name: Close previous pull request
+        if: env.CHANGES_DETECTED == 'true' && env.PREVIOUS_PULL_REQUEST != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_PULL_REQUEST: ${{ env.PREVIOUS_PULL_REQUEST }}
+          NEW_PULL_REQUEST: ${{ env.PULL_REQUEST_URL }}
+        run: |
+          gh pr close "${PREVIOUS_PULL_REQUEST}" --comment "Superseded by ${NEW_PULL_REQUEST}" --delete-branch
