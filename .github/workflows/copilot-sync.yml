@@ -23,16 +23,18 @@ jobs:
         id: process_config
         run: |
           syncRepo="$(jq -r '.repo' .github/copilot-sync.json)"
-          export "SYNC_REPO=${syncRepo}" >>"${GITHUB_ENV}"
+          export "sync-repo=${syncRepo}" >>"${GITHUB_ENV}"
 
           syncRef="$(jq -r '.ref' .github/copilot-sync.json)"
-          export "SYNC_REF=${syncRef}" >>"${GITHUB_OUTPUT}"
+          export "sync-ref=${syncRef}" >>"${GITHUB_ENV}"
           
           syncInstructions="$(jq -r '.instructions' .github/copilot-sync.json)"
-          export "SYNC_INSTRUCTIONS=${syncInstructions}" >>"${GITHUB_OUTPUT}"
+          export "sync-instructions=${syncInstructions}" >>"${GITHUB_ENV}"
 
       - name: Compare Version
         id: compare_version
+        env:
+          SYNC_REPO: ${{ env.sync-repo }}
         run: |
           syncRepoLatestRef=$(gh release list --repo ${SYNC_REPO} --json name,isLatest | jq -r '.[] | select(.isLatest == true) | .name')
           export "SYNC_REPO_LATEST_REF=${syncRepoLatestRef}" >>"${GITHUB_ENV}"
