@@ -102,7 +102,7 @@ jobs:
 
           gh api \
             --method POST "/repos/${{ github.repository }}/git/refs" \
-            --raw-field ref="refs/heads/${BRANCH_NAME}" \
+            --raw-field ref="refs/heads/${branch_name}" \
             --raw-field sha="$(git rev-parse HEAD)"
 
       - name: Commit changes
