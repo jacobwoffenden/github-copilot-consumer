@@ -115,6 +115,7 @@ jobs:
 
           # Track files we want to exist after sync.
           desired_files=()
+          missing_entries=()
 
           for instruction in ${instructions}; do
             # Special case: copilot-instructions has a different filename.
@@ -132,10 +133,18 @@ jobs:
             else
               echo "Missing upstream file for ${instruction}; keeping local copy if present"
               echo "::warning::Missing upstream file for ${instruction} (${base_url}/${src_path})"
-              echo "- Missing upstream file for ${instruction}: ${base_url}/${src_path}" >>"${GITHUB_STEP_SUMMARY}"
+              missing_entries+=("- ${instruction}: ${base_url}/${src_path}")
             fi
             desired_files+=("${dest_path}")
           done
+
+          if [[ ${#missing_entries[@]} -gt 0 ]]; then
+            {
+              echo "MISSING_UPSTREAM_FILES<<EOF"
+              printf '%s\n' "${missing_entries[@]}"
+              echo "EOF"
+            } >>"${GITHUB_ENV}"
+          fi
 
           # Find existing instruction files in .github.
           mapfile -t existing_files < <(find .github -maxdepth 1 -type f \( -name "*.instructions.md" -o -name "copilot-instructions.md" \) -print)
@@ -248,10 +257,19 @@ jobs:
           # Open a new PR for the sync changes.
           pull_request_url=$(gh pr create \
             --title ":copilot: Sync Copilot configuration from ${SYNC_REPO}@${SYNC_REF}" \
-            --body "This pull request syncs Copilot instructions from ${SYNC_REPO}@${SYNC_REF}.\n\nUpstream release: https://github.com/${SYNC_REPO}/releases/tag/${SYNC_REF}" \
+            --body "This pull request syncs Copilot instructions from https://github.com/${SYNC_REPO}/releases/tag/${SYNC_REF}" \
             --head "${BRANCH_NAME}" \
             --base "main")
           echo "PULL_REQUEST_URL=${pull_request_url}" >>"${GITHUB_ENV}"
+
+      - name: Comment missing upstream files
+        if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.BRANCH_HAS_CHANGES == 'true' && env.MISSING_UPSTREAM_FILES != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_URL: ${{ env.PULL_REQUEST_URL }}
+          MISSING_UPSTREAM_FILES: ${{ env.MISSING_UPSTREAM_FILES }}
+        run: |
+          gh pr comment "${PULL_REQUEST_URL}" --body "⚠️ Missing upstream files:\n${MISSING_UPSTREAM_FILES}"
 
       - name: Close previous pull request
         if: env.CHANGES_DETECTED == 'true' && env.PR_ALREADY_OPEN != 'true' && env.BRANCH_HAS_CHANGES == 'true' && env.PREVIOUS_PULL_REQUESTS != ''
