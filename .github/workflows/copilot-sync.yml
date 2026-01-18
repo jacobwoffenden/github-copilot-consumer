@@ -2,8 +2,10 @@
 name: Copilot Sync
 
 on:
+  # Manual trigger so you can run the sync on demand.
   workflow_dispatch:
 
+# Default to no permissions; grant only what the job needs.
 permissions: {}
 
 jobs:
@@ -11,30 +13,75 @@ jobs:
     name: Copilot Sync
     runs-on: ubuntu-latest
     permissions:
+      # Required to write the synced files back to the repo.
       contents: write
     steps:
       - name: Checkout
         id: checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
+          # Use the GITHUB_TOKEN from the job instead of a persisted checkout token.
           persist-credentials: false
 
       - name: Process .github/copilot-sync.json
         id: process_config
         run: |
-          syncRepo="$(jq -r '.repo' .github/copilot-sync.json)"
-          export "sync-repo=${syncRepo}" >>"${GITHUB_ENV}"
+          # Read sync metadata from the local config file.
+          syncRepo="$(jq --raw-output '.repo' .github/copilot-sync.json)"
+          echo "SYNC_REPO=${syncRepo}" >>"${GITHUB_ENV}"
 
-          syncRef="$(jq -r '.ref' .github/copilot-sync.json)"
-          export "sync-ref=${syncRef}" >>"${GITHUB_ENV}"
-          
-          syncInstructions="$(jq -r '.instructions' .github/copilot-sync.json)"
-          export "sync-instructions=${syncInstructions}" >>"${GITHUB_ENV}"
+          syncRef="$(jq --raw-output '.ref' .github/copilot-sync.json)"
+          echo "SYNC_REF=${syncRef}" >>"${GITHUB_ENV}"
 
-      - name: Compare Version
-        id: compare_version
-        env:
-          SYNC_REPO: ${{ env.sync-repo }}
+      - name: Sync Copilot instructions
+        id: sync_instructions
         run: |
-          syncRepoLatestRef=$(gh release list --repo ${SYNC_REPO} --json name,isLatest | jq -r '.[] | select(.isLatest == true) | .name')
-          export "SYNC_REPO_LATEST_REF=${syncRepoLatestRef}" >>"${GITHUB_ENV}"
+          set -euo pipefail
+
+          # Load the instruction names from config as a list.
+          instructions=$(jq --raw-output '.instructions[]' .github/copilot-sync.json)
+          # Base URL for raw files in the distribution repo.
+          baseUrl="https://raw.githubusercontent.com/${SYNC_REPO}/${SYNC_REF}/copilot-instructions"
+
+          # Ensure the destination folder exists.
+          mkdir --parents .github
+
+          # Track files we want to exist after sync.
+          desired_files=()
+
+          for instruction in ${instructions}; do
+            # Special case: copilot-instructions has a different filename.
+            if [[ "${instruction}" == "copilot-instructions" ]]; then
+              srcPath="${instruction}.md"
+              destPath=".github/${instruction}.md"
+            else
+              srcPath="${instruction}.instructions.md"
+              destPath=".github/${instruction}.instructions.md"
+            fi
+
+            # Download the file from the distribution repo.
+            curl --fail --silent --show-error --location "${baseUrl}/${srcPath}" --output "${destPath}"
+            desired_files+=("${destPath}")
+            echo "Synced ${instruction} -> ${destPath}"
+          done
+
+          # Find existing instruction files in .github.
+          mapfile -t existing_files < <(find .github --maxdepth 1 --type f \( --name "*.instructions.md" -o --name "copilot-instructions.md" \) --print)
+
+          for existing in "${existing_files[@]}"; do
+            keep=false
+            for desired in "${desired_files[@]}"; do
+              if [[ "${existing}" == "${desired}" ]]; then
+                keep=true
+                break
+              fi
+            done
+
+            # Remove files no longer in the mapping.
+            if [[ "${keep}" == "false" ]]; then
+              rm -f "${existing}"
+              echo "Removed stale ${existing}"
+            fi
+          done
+
+          ls -rlt .github/
